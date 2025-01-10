@@ -35,63 +35,64 @@ class ConnectLoop:
     def connect_loop(cls, context, ob):
         # connect selected vertices by shortest loop
         ob = ob if ob else context.active_object
-        # edit/object mode
-        mode = ob.mode
-        if ob.mode == 'EDIT':
-            bpy.ops.object.mode_set(mode='OBJECT')
-        # get data loop from source mesh
-        bm = bmesh.new()
-        bm.from_mesh(ob.data)
-        bm.verts.ensure_lookup_table()
-        # selected vertices
-        selected_vertices = [vertex for vertex in bm.verts if vertex.select]
-        # create KDTree for selected vertices
-        kd = kdtree.KDTree(len(selected_vertices))
-        for vertex in selected_vertices:
-            kd.insert(vertex.co, vertex.index)
-        kd.balance()
-        # create loop from selected vertices starting from active vertex
-        if bm.select_history.active:
-            loop = [bm.select_history.active, ]
-            selected_vertices.remove(bm.select_history.active)
+        if ob:
+            # edit/object mode
+            mode = ob.mode
+            if ob.mode == 'EDIT':
+                bpy.ops.object.mode_set(mode='OBJECT')
+            # get data loop from source mesh
+            bm = bmesh.new()
+            bm.from_mesh(ob.data)
+            bm.verts.ensure_lookup_table()
+            # selected vertices
+            selected_vertices = [vertex for vertex in bm.verts if vertex.select]
+            # create KDTree for selected vertices
+            kd = kdtree.KDTree(len(selected_vertices))
+            for vertex in selected_vertices:
+                kd.insert(vertex.co, vertex.index)
+            kd.balance()
+            # create loop from selected vertices starting from active vertex
+            if bm.select_history.active:
+                loop = [bm.select_history.active, ]
+                selected_vertices.remove(bm.select_history.active)
 
-            def flt(_index):
-                # filter vertices finding by KDTree to exclude already found and linked by edges
-                # already found vertices are in the "loop" list
-                # vertices connected by edges we dynamically remove from "selected_vertices"
-                return _index not in (vertex.index for vertex in loop) \
-                    and _index in (vertex.index for vertex in selected_vertices)
+                def flt(_index):
+                    # filter vertices finding by KDTree to exclude already found and linked by edges
+                    # already found vertices are in the "loop" list
+                    # vertices connected by edges we dynamically remove from "selected_vertices"
+                    return _index not in (vertex.index for vertex in loop) \
+                        and _index in (vertex.index for vertex in selected_vertices)
 
-            # find next vertex - mostly close to the first vertex
-            current_vertex = bm.select_history.active
-            _l = len(selected_vertices)
-            _i = 0
-            while current_vertex:
-                # check if current vertex has linked selected vertices by edges, to exclude them from next search
-                linked_verts = cls._linked_verts(bm_vert=current_vertex, deep=cls._linked_verts_recursive_deep)
-                selected_vertices = list(set(selected_vertices) - linked_verts)
-                # find next vertex closest to the current_vertex, this vertex will be current on the next step
-                co, index, distance = kd.find(co=current_vertex.co, filter=flt)
-                current_vertex = bm.verts[index] if index else None
-                if current_vertex:
-                    loop.append(current_vertex)
-                    selected_vertices.remove(current_vertex)
-                # alarm break
-                _i += 1
-                if _i > _l:
-                    print('overflow err exit')
-                    break
-            # now we have loop of vertices - build edges by it
-            # print('loop', loop)
-            # split loop for chunks each of two vertices
-            for chunk in (_chunk for _chunk in cls._chunks(lst=loop, n=2, offset=1) if len(_chunk) == 2):
-                # create edge for each vertex's pair
-                bm.edges.new(chunk)
-        # save changed data to mesh
-        bm.to_mesh(ob.data)
-        bm.free()
-        # return mode back
-        bpy.ops.object.mode_set(mode=mode)
+                # find next vertex - mostly close to the first vertex
+                current_vertex = bm.select_history.active
+                _l = len(selected_vertices)
+                _i = 0
+                while current_vertex:
+                    # check if current vertex has linked selected vertices by edges, to exclude them from next search
+                    linked_verts = cls._linked_verts(bm_vert=current_vertex, deep=cls._linked_verts_recursive_deep)
+                    selected_vertices = list(set(selected_vertices) - linked_verts)
+                    # find next vertex closest to the current_vertex, this vertex will be current on the next step
+                    co, index, distance = kd.find(co=current_vertex.co, filter=flt)
+                    current_vertex = bm.verts[index] if index else None
+                    if current_vertex:
+                        loop.append(current_vertex)
+                        selected_vertices.remove(current_vertex)
+                    # alarm break
+                    _i += 1
+                    if _i > _l:
+                        print('overflow err exit')
+                        break
+                # now we have loop of vertices - build edges by it
+                # print('loop', loop)
+                # split loop for chunks each of two vertices
+                for chunk in (_chunk for _chunk in cls._chunks(lst=loop, n=2, offset=1) if len(_chunk) == 2):
+                    # create edge for each vertex's pair
+                    bm.edges.new(chunk)
+            # save changed data to mesh
+            bm.to_mesh(ob.data)
+            bm.free()
+            # return mode back
+            bpy.ops.object.mode_set(mode=mode)
 
     @classmethod
     def _linked_verts(cls, bm_vert, deep=3, verts=None):
