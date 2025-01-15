@@ -7,14 +7,15 @@
 import bmesh
 import bpy
 from mathutils import kdtree
-from bpy.types import Operator, Panel
+from bpy.props import BoolProperty
+from bpy.types import Operator, Panel, Scene
 from bpy.utils import register_class, unregister_class
 
 bl_info = {
     "name": "Connect Loop",
     "description": "Connects selected vertices by shortest loop",
     "author": "Nikita Akimov, Paul Kotelevets",
-    "version": (1, 0, 0),
+    "version": (1, 0, 1),
     "blender": (2, 79, 0),
     "location": "View3D > Tool panel > 1D > Connect Loop",
     "doc_url": "https://github.com/Korchy/1d_connect_loop",
@@ -32,8 +33,9 @@ class ConnectLoop:
     _linked_verts_recursive_deep = 10
 
     @classmethod
-    def connect_loop(cls, context, ob):
+    def connect_loop(cls, context, ob, boundary_priority=True):
         # connect selected vertices by shortest loop
+        #   if boundary_priority == True - boundary vertex on the isoline is priority for connecting
         ob = ob if ob else context.active_object
         if ob:
             # edit/object mode
@@ -45,6 +47,20 @@ class ConnectLoop:
             bm.from_mesh(ob.data)
             bm.verts.ensure_lookup_table()
             # selected vertices
+            if boundary_priority:
+                # modify selection - try to find boundary vertices (have only one linked edge) and if vertices
+                #   connected by the edge vertices are selected too - remove this selection. Leave only boundary
+                #   vertex selected
+                bm.select_mode = {'VERT'}   # to enable full deselect (edges and faces) just by deselecting vertices
+                # for each boundary vertex
+                for vertex in (_vertex for _vertex in bm.verts
+                               if _vertex.select and len(_vertex.link_edges) == 1):
+                    linked_to_boundary_verts = cls._linked_verts(bm_vert=vertex, deep=cls._linked_verts_recursive_deep)
+                    linked_to_boundary_verts -= {vertex}  # starting (boundary in our case) vertex is also in the list
+                    for linked_vertex in linked_to_boundary_verts:
+                        linked_vertex.select = False
+                bm.select_flush_mode()  # recalculate selection to apply deselecting vertices to edges and faces
+            # selected vertices list
             selected_vertices = [vertex for vertex in bm.verts if vertex.select]
             # create KDTree for selected vertices
             kd = kdtree.KDTree(len(selected_vertices))
@@ -87,7 +103,12 @@ class ConnectLoop:
                 # split loop for chunks each of two vertices
                 for chunk in (_chunk for _chunk in cls._chunks(lst=loop, n=2, offset=1) if len(_chunk) == 2):
                     # create edge for each vertex's pair
-                    bm.edges.new(chunk)
+                    # first try to create with splitting faces
+                    connected_dict = bmesh.ops.connect_vert_pair(bm, verts=chunk)
+                    # if no edges were created - try to connect vertices without faces between them
+                    #   by just creating new edge
+                    if not connected_dict['edges']:
+                        bm.edges.new(chunk)
             # save changed data to mesh
             bm.to_mesh(ob.data)
             bm.free()
@@ -118,11 +139,15 @@ class ConnectLoop:
     @staticmethod
     def ui(layout, context):
         # ui panel
-        layout.operator(
+        op = layout.operator(
             operator='connect_loop.connect_loop',
             icon='PARTICLE_POINT'
         )
-
+        op.boundary_priority = context.scene.connect_loop_prop_boundary_priority
+        layout.prop(
+            data=context.scene,
+            property='connect_loop_prop_boundary_priority'
+        )
 
 # OPERATORS
 
@@ -132,10 +157,16 @@ class ConnectLoop_OT_connect_loop(Operator):
     bl_description = 'Connects selected vertices by shortest loop'
     bl_options = {'REGISTER', 'UNDO'}
 
+    boundary_priority = BoolProperty(
+        name='Boundary Priority',
+        default=True
+    )
+
     def execute(self, context):
         ConnectLoop.connect_loop(
             context=context,
-            ob=context.active_object
+            ob=context.active_object,
+            boundary_priority = self.boundary_priority
         )
         return {'FINISHED'}
 
@@ -158,6 +189,10 @@ class ConnectLoop_PT_panel(Panel):
 # REGISTER
 
 def register(ui=True):
+    Scene.connect_loop_prop_boundary_priority = BoolProperty(
+        name='Boundary Priority',
+        default=True
+    )
     register_class(ConnectLoop_OT_connect_loop)
     if ui:
         register_class(ConnectLoop_PT_panel)
@@ -167,6 +202,7 @@ def unregister(ui=True):
     if ui:
         unregister_class(ConnectLoop_PT_panel)
     unregister_class(ConnectLoop_OT_connect_loop)
+    del Scene.connect_loop_prop_boundary_priority
 
 
 if __name__ == '__main__':
